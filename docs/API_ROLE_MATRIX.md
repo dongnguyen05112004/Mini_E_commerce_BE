@@ -95,14 +95,19 @@ GET   /online-order-items
 GET   /pos-sales
 GET   /pos-sale-items
 
-GET   /deliveries
-PUT   /deliveries/:id
-PATCH /deliveries/:id
-
 POST  /workflows/pos-sales/checkout
 PATCH /workflows/online-orders/:id/status
 PATCH /workflows/online-orders/:id/cancel
+
+PUT   /orders/:id/status
+PATCH /orders/:id/status
+PUT   /orders/:id/delivery
+PATCH /orders/:id/delivery
 ```
+
+Staff order status accepts canonical values such as `PREPARING`, `SHIPPING`, `COMPLETED`
+and common frontend aliases such as `packing`, `preparing`, `delivered`.
+Delivery-only updates support `DELIVERING` and `FAILED`.
 
 ## Customer
 

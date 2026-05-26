@@ -102,6 +102,12 @@ router.get("/orders/:id/pick-list", getPickList);
 // Cập nhật trạng thái đơn: CONFIRMED→PROCESSING→SHIPPING→COMPLETED
 // PUT /api/staff/orders/:id/status
 router.put("/orders/:id/status", updateOnlineOrderStatus);
+router.patch("/orders/:id/status", updateOnlineOrderStatus);
+
+// Cập nhật trạng thái/thông tin giao hàng nội bộ
+// PATCH /api/staff/orders/:id/delivery
+router.put("/orders/:id/delivery", updateOnlineOrderStatus);
+router.patch("/orders/:id/delivery", updateOnlineOrderStatus);
 
 // Hủy đơn hàng (trong phạm vi quyền staff)
 // PUT /api/staff/orders/:id/cancel

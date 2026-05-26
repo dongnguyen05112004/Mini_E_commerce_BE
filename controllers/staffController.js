@@ -44,6 +44,99 @@ const logActivity = (tx, { userId, action, entityType, entityId, req, metadata }
     },
   });
 
+const normalizeStatusToken = (value) =>
+  value === undefined || value === null
+    ? ""
+    : String(value).trim().replace(/[\s-]+/g, "_").toUpperCase();
+
+const ORDER_STATUS_ALIASES = {
+  PENDING: "PENDING",
+  WAITING: "PENDING",
+  CONFIRMED: "CONFIRMED",
+  CONFIRM: "CONFIRMED",
+  PACKING: "PREPARING",
+  PREPARING: "PREPARING",
+  PREPARE: "PREPARING",
+  PROCESSING: "PROCESSING",
+  SHIPPING: "SHIPPING",
+  SHIPPED: "SHIPPING",
+  DELIVERED: "COMPLETED",
+  COMPLETED: "COMPLETED",
+  COMPLETE: "COMPLETED",
+  CANCELLED: "CANCELLED",
+  CANCELED: "CANCELLED",
+  DELIVERING: "DELIVERING",
+  FAILED: "FAILED",
+};
+
+const DELIVERY_STATUS_ALIASES = {
+  PENDING: "PENDING",
+  WAITING: "PENDING",
+  PACKING: "PREPARING",
+  PREPARING: "PREPARING",
+  PROCESSING: "PREPARING",
+  SHIPPING: "SHIPPING",
+  SHIPPED: "SHIPPING",
+  DELIVERING: "DELIVERING",
+  DELIVERED: "DELIVERED",
+  COMPLETED: "DELIVERED",
+  COMPLETE: "DELIVERED",
+  CANCELLED: "CANCELLED",
+  CANCELED: "CANCELLED",
+  FAILED: "FAILED",
+};
+
+const DELIVERY_ONLY_STATUSES = new Set(["DELIVERING", "FAILED"]);
+const VALID_DELIVERY_STATUSES = new Set([
+  "PENDING",
+  "PREPARING",
+  "SHIPPING",
+  "DELIVERING",
+  "DELIVERED",
+  "CANCELLED",
+  "FAILED",
+]);
+const DELIVERY_STATUS_TO_ORDER_STATUS = {
+  PREPARING: "PREPARING",
+  SHIPPING: "SHIPPING",
+  DELIVERED: "COMPLETED",
+};
+
+const normalizeOrderStatusCode = (value) => {
+  const token = normalizeStatusToken(value);
+  return ORDER_STATUS_ALIASES[token] || token;
+};
+
+const normalizeDeliveryStatus = (value) => {
+  const token = normalizeStatusToken(value);
+  return DELIVERY_STATUS_ALIASES[token] || token;
+};
+
+const buildDeliveryUpdateData = ({ status, carrierName, trackingCode, now }) => {
+  const data = { status };
+
+  if (carrierName !== undefined) data.carrierName = carrierName || null;
+  if (trackingCode !== undefined) data.trackingCode = trackingCode || null;
+  if (["SHIPPING", "DELIVERING"].includes(status)) data.shippedAt = now;
+  if (status === "DELIVERED") data.deliveredAt = now;
+
+  return data;
+};
+
+const markOnlineOrderPaid = async (tx, orderId, paidAt) => {
+  await tx.payment.updateMany({
+    where: {
+      targetType: "ONLINE_ORDER",
+      targetId: orderId,
+      status: { in: ["UNPAID", "PENDING", "FAILED"] },
+    },
+    data: {
+      status: "PAID",
+      paidAt,
+    },
+  });
+};
+
 /* ═══════════════════════════════════════════════════════════
    1. POS – TÌM SẢN PHẨM (US-STF-02)
    GET /api/staff/pos/products?keyword=&warehouseId=
@@ -175,7 +268,20 @@ const getOnlineOrders = asyncHandler(async (req, res) => {
 
   const where = {};
 
-  if (status) where.statusCode = status;
+  if (status) {
+    const normalizedStatus = normalizeOrderStatusCode(status);
+    if (DELIVERY_ONLY_STATUSES.has(normalizedStatus)) {
+      where.delivery = { is: { status: normalizeDeliveryStatus(status) } };
+    } else {
+      where.statusCode = normalizedStatus;
+    }
+  }
+
+  if (req.query.deliveryStatus) {
+    where.delivery = {
+      is: { status: normalizeDeliveryStatus(req.query.deliveryStatus) },
+    };
+  }
 
   if (search.trim()) {
     where.OR = [
@@ -193,6 +299,7 @@ const getOnlineOrders = asyncHandler(async (req, res) => {
       orderBy: { createdAt: "desc" },
       include: {
         status: { select: { code: true, name: true } },
+        delivery: true,
         customer: { select: { id: true, fullName: true, email: true, phone: true } },
         items: {
           select: {
@@ -389,15 +496,54 @@ const getPickList = asyncHandler(async (req, res) => {
    ═══════════════════════════════════════════════════════════ */
 const updateOnlineOrderStatus = asyncHandler(async (req, res) => {
   const orderId = toInt(req.params.id, "id");
-  const { statusCode: nextStatusCode, note } = req.body;
+  const {
+    statusCode,
+    status,
+    orderStatus,
+    deliveryStatus,
+    note,
+    carrierName,
+    trackingCode,
+  } = req.body;
+  const requestedOrderStatus = statusCode ?? orderStatus ?? status;
+  let nextStatusCode = requestedOrderStatus
+    ? normalizeOrderStatusCode(requestedOrderStatus)
+    : null;
+  let nextDeliveryStatus = deliveryStatus
+    ? normalizeDeliveryStatus(deliveryStatus)
+    : null;
 
-  if (!nextStatusCode) {
-    throw createHttpError(400, "statusCode is required");
+  if (nextStatusCode && DELIVERY_ONLY_STATUSES.has(nextStatusCode)) {
+    nextDeliveryStatus = nextStatusCode;
+    nextStatusCode = null;
+  }
+
+  if (nextDeliveryStatus && !VALID_DELIVERY_STATUSES.has(nextDeliveryStatus)) {
+    throw createHttpError(400, `Unsupported deliveryStatus: ${nextDeliveryStatus}`);
+  }
+
+  if (!nextStatusCode && nextDeliveryStatus) {
+    nextStatusCode = DELIVERY_STATUS_TO_ORDER_STATUS[nextDeliveryStatus] || null;
+  }
+
+  if (
+    nextDeliveryStatus &&
+    !nextStatusCode &&
+    !DELIVERY_ONLY_STATUSES.has(nextDeliveryStatus)
+  ) {
+    throw createHttpError(
+      400,
+      `deliveryStatus ${nextDeliveryStatus} must be handled by order status flow`
+    );
+  }
+
+  if (!nextStatusCode && !nextDeliveryStatus) {
+    throw createHttpError(400, "statusCode or deliveryStatus is required");
   }
 
   // Danh sách trạng thái staff được phép chuyển
   const STAFF_ALLOWED_TRANSITIONS = {
-    CONFIRMED: ["PREPARING", "PROCESSING"],
+    CONFIRMED: ["PREPARING", "PROCESSING", "SHIPPING"],
     PREPARING: ["SHIPPING"],
     PROCESSING: ["SHIPPING"],
     SHIPPING: ["COMPLETED"],
@@ -410,6 +556,84 @@ const updateOnlineOrderStatus = asyncHandler(async (req, res) => {
     });
 
     if (!order) throw createHttpError(404, "Online order not found");
+
+    if (nextDeliveryStatus && !nextStatusCode) {
+      if (!["SHIPPING", "COMPLETED"].includes(order.statusCode)) {
+        throw createHttpError(
+          400,
+          `Cannot update delivery status while order is ${order.statusCode}`
+        );
+      }
+
+      const now = new Date();
+      await tx.delivery.updateMany({
+        where: { onlineOrderId: orderId },
+        data: buildDeliveryUpdateData({
+          status: nextDeliveryStatus,
+          carrierName,
+          trackingCode,
+          now,
+        }),
+      });
+
+      await logOrderStatus(tx, {
+        onlineOrderId: orderId,
+        fromStatusCode: order.statusCode,
+        toStatusCode: order.statusCode,
+        changedById: req.user.id,
+        note: note || `Delivery status updated to ${nextDeliveryStatus}`,
+      });
+
+      await logActivity(tx, {
+        userId: req.user.id,
+        action: "UPDATE_DELIVERY_STATUS",
+        entityType: "onlineOrder",
+        entityId: orderId,
+        req,
+        metadata: {
+          orderStatus: order.statusCode,
+          deliveryStatus: nextDeliveryStatus,
+          carrierName,
+          trackingCode,
+        },
+      });
+
+      return tx.onlineOrder.findUnique({
+        where: { id: orderId },
+        include: { items: true, delivery: true },
+      });
+    }
+
+    if (order.statusCode === nextStatusCode) {
+      if (carrierName !== undefined || trackingCode !== undefined || nextDeliveryStatus) {
+        const now = new Date();
+        const deliveryStatusToPersist =
+          nextDeliveryStatus || normalizeDeliveryStatus(nextStatusCode);
+        await tx.delivery.updateMany({
+          where: { onlineOrderId: orderId },
+          data: buildDeliveryUpdateData({
+            status: deliveryStatusToPersist,
+            carrierName,
+            trackingCode,
+            now,
+          }),
+        });
+      }
+
+      if (nextStatusCode === "COMPLETED" && order.paymentStatus !== "PAID") {
+        const paidAt = new Date();
+        await tx.onlineOrder.update({
+          where: { id: orderId },
+          data: { paymentStatus: "PAID" },
+        });
+        await markOnlineOrderPaid(tx, orderId, paidAt);
+      }
+
+      return tx.onlineOrder.findUnique({
+        where: { id: orderId },
+        include: { items: true, delivery: true },
+      });
+    }
 
     const allowed = STAFF_ALLOWED_TRANSITIONS[order.statusCode] || [];
     if (!allowed.includes(nextStatusCode)) {
@@ -443,7 +667,10 @@ const updateOnlineOrderStatus = asyncHandler(async (req, res) => {
 
     const updatedOrder = await tx.onlineOrder.update({
       where: { id: orderId },
-      data: { statusCode: nextStatusCode },
+      data: {
+        statusCode: nextStatusCode,
+        ...(nextStatusCode === "COMPLETED" ? { paymentStatus: "PAID" } : {}),
+      },
       include: { items: true, delivery: true },
     });
 
@@ -468,6 +695,8 @@ const updateOnlineOrderStatus = asyncHandler(async (req, res) => {
         where: { onlineOrderId: orderId },
         data: {
           status: deliveryStatus,
+          ...(carrierName !== undefined ? { carrierName: carrierName || null } : {}),
+          ...(trackingCode !== undefined ? { trackingCode: trackingCode || null } : {}),
           shippedAt: deliveryStatus === "SHIPPING" ? new Date() : undefined,
           deliveredAt: deliveryStatus === "DELIVERED" ? new Date() : undefined,
         },
@@ -475,6 +704,8 @@ const updateOnlineOrderStatus = asyncHandler(async (req, res) => {
     }
 
     if (nextStatusCode === "COMPLETED" && order.statusCode !== "COMPLETED") {
+      await markOnlineOrderPaid(tx, orderId, new Date());
+
       await tx.customerProfile.upsert({
         where: { userId: order.customerId },
         update: {

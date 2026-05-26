@@ -75,8 +75,10 @@ enum DeliveryStatus {
   PENDING
   PREPARING
   SHIPPING
+  DELIVERING
   DELIVERED
   CANCELLED
+  FAILED
 }
 
 enum StockCheckStatus {

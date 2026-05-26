@@ -20,6 +20,32 @@ const CONSUMED_STATUSES = new Set(["SHIPPING", "COMPLETED", "RETURNED"]);
 const asTrimmedString = (value) =>
   value === undefined || value === null ? "" : String(value).trim();
 
+const normalizeStatusToken = (value) =>
+  value === undefined || value === null
+    ? ""
+    : String(value).trim().replace(/[\s-]+/g, "_").toUpperCase();
+
+const ORDER_STATUS_ALIASES = {
+  PENDING: "PENDING",
+  WAITING: "PENDING",
+  CONFIRMED: "CONFIRMED",
+  PACKING: "PREPARING",
+  PREPARING: "PREPARING",
+  PROCESSING: "PROCESSING",
+  SHIPPING: "SHIPPING",
+  SHIPPED: "SHIPPING",
+  DELIVERED: "COMPLETED",
+  COMPLETED: "COMPLETED",
+  CANCELLED: "CANCELLED",
+  CANCELED: "CANCELLED",
+  RETURNED: "RETURNED",
+};
+
+const normalizeOrderStatusCode = (value) => {
+  const token = normalizeStatusToken(value);
+  return ORDER_STATUS_ALIASES[token] || token;
+};
+
 const getDefaultPaymentMethod = async (tx) => {
   const paymentMethod = await tx.paymentMethod.findFirst({
     where: {
@@ -521,7 +547,9 @@ const applyInventoryForStatusTransition = async (
 };
 
 const updateOnlineOrderStatus = async (onlineOrderId, payload, actor) => {
-  const nextStatusCode = payload.statusCode;
+  const nextStatusCode = normalizeOrderStatusCode(
+    payload.statusCode ?? payload.status ?? payload.orderStatus
+  );
 
   if (!nextStatusCode) {
     throw createHttpError(400, "statusCode is required");
@@ -549,7 +577,32 @@ const updateOnlineOrderStatus = async (onlineOrderId, payload, actor) => {
     }
 
     if (order.statusCode === nextStatusCode) {
-      return order;
+      if (nextStatusCode === "COMPLETED" && order.paymentStatus !== "PAID") {
+        const paidAt = new Date();
+        await tx.onlineOrder.update({
+          where: { id: onlineOrderId },
+          data: { paymentStatus: "PAID" },
+        });
+        await tx.payment.updateMany({
+          where: {
+            targetType: "ONLINE_ORDER",
+            targetId: onlineOrderId,
+            status: { in: ["UNPAID", "PENDING", "FAILED"] },
+          },
+          data: {
+            status: "PAID",
+            paidAt,
+          },
+        });
+      }
+
+      return tx.onlineOrder.findUnique({
+        where: { id: onlineOrderId },
+        include: {
+          items: true,
+          delivery: true,
+        },
+      });
     }
 
     await applyInventoryForStatusTransition(tx, {
@@ -563,6 +616,7 @@ const updateOnlineOrderStatus = async (onlineOrderId, payload, actor) => {
       where: { id: onlineOrderId },
       data: {
         statusCode: nextStatusCode,
+        ...(nextStatusCode === "COMPLETED" ? { paymentStatus: "PAID" } : {}),
       },
       include: {
         items: true,
@@ -586,6 +640,12 @@ const updateOnlineOrderStatus = async (onlineOrderId, payload, actor) => {
         where: { onlineOrderId },
         data: {
           status: deliveryStatus,
+          ...(payload.carrierName !== undefined
+            ? { carrierName: payload.carrierName || null }
+            : {}),
+          ...(payload.trackingCode !== undefined
+            ? { trackingCode: payload.trackingCode || null }
+            : {}),
           shippedAt: deliveryStatus === "SHIPPING" ? new Date() : undefined,
           deliveredAt: deliveryStatus === "DELIVERED" ? new Date() : undefined,
         },
@@ -593,6 +653,18 @@ const updateOnlineOrderStatus = async (onlineOrderId, payload, actor) => {
     }
 
     if (nextStatusCode === "COMPLETED" && order.statusCode !== "COMPLETED") {
+      await tx.payment.updateMany({
+        where: {
+          targetType: "ONLINE_ORDER",
+          targetId: onlineOrderId,
+          status: { in: ["UNPAID", "PENDING", "FAILED"] },
+        },
+        data: {
+          status: "PAID",
+          paidAt: new Date(),
+        },
+      });
+
       await updateCustomerProfileForCompletedOrder(tx, order);
     }
 

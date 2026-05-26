@@ -187,7 +187,7 @@ const adjustStockCheck = asyncHandler(async (req, res) => {
 // 5. Get Revenue Report
 const getRevenueReport = asyncHandler(async (req, res) => {
   const { startDate, endDate } = req.query;
-  const whereOnline = { statusCode: "COMPLETED" };
+  const whereOnline = { statusCode: "COMPLETED", paymentStatus: "PAID" };
   const wherePos = { status: "COMPLETED" };
 
   if (startDate || endDate) {
@@ -224,7 +224,9 @@ const getRevenueReport = asyncHandler(async (req, res) => {
 const getProfitReport = asyncHandler(async (req, res) => {
   const { startDate, endDate } = req.query;
   
-  const whereOnline = { onlineOrder: { statusCode: "COMPLETED" } };
+  const whereOnline = {
+    onlineOrder: { statusCode: "COMPLETED", paymentStatus: "PAID" },
+  };
   const wherePos = { posSale: { status: "COMPLETED" } };
 
   if (startDate || endDate) {
@@ -338,7 +340,7 @@ const getManagerDashboard = asyncHandler(async (req, res) => {
       }
     }).catch(() => 0),
     prisma.onlineOrder.aggregate({
-      where: { statusCode: "COMPLETED" },
+      where: { statusCode: "COMPLETED", paymentStatus: "PAID" },
       _sum: { total: true }
     }),
     prisma.posSale.aggregate({
