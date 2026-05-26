@@ -1,0 +1,863 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  BLOCKED
+}
+
+enum RecordStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+  DISCONTINUED
+}
+
+enum InventoryTransactionType {
+  PURCHASE_IN
+  POS_SALE_OUT
+  ONLINE_ORDER_RESERVE
+  ONLINE_ORDER_OUT
+  RETURN_IN
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+  TRANSFER_IN
+  TRANSFER_OUT
+  CANCEL_RELEASE
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  RECEIVED
+  CANCELLED
+}
+
+enum PosSaleStatus {
+  COMPLETED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum DiscountType {
+  PERCENT
+  FIXED
+}
+
+enum PromotionStatus {
+  ACTIVE
+  INACTIVE
+  EXPIRED
+}
+
+enum DeliveryStatus {
+  PENDING
+  PREPARING
+  SHIPPING
+  DELIVERED
+  CANCELLED
+}
+
+enum StockCheckStatus {
+  DRAFT
+  COMPLETED
+  CANCELLED
+}
+
+model Role {
+  id          Int      @id @default(autoincrement())
+  code        String   @unique @db.VarChar(50)
+  name        String   @db.VarChar(100)
+  description String?  @db.VarChar(255)
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users           User[]
+  rolePermissions RolePermission[]
+
+  @@index([code])
+  @@map("roles")
+}
+
+model Permission {
+  id          Int      @id @default(autoincrement())
+  code        String   @unique @db.VarChar(100)
+  name        String   @db.VarChar(120)
+  group       String   @db.VarChar(80)
+  description String?  @db.VarChar(255)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rolePermissions RolePermission[]
+
+  @@index([group])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           Int      @id @default(autoincrement())
+  roleId       Int
+  permissionId Int
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model Branch {
+  id        Int          @id @default(autoincrement())
+  code      String       @unique @db.VarChar(50)
+  name      String       @db.VarChar(150)
+  phone     String?      @db.VarChar(20)
+  address   String?      @db.VarChar(255)
+  city      String?      @db.VarChar(120)
+  status    RecordStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  users          User[]
+  warehouses     Warehouse[]
+  posSales       PosSale[]
+  purchaseOrders PurchaseOrder[]
+  onlineOrders   OnlineOrder[]
+
+  @@index([status])
+  @@map("branches")
+}
+
+model User {
+  id           Int        @id @default(autoincrement())
+  roleId       Int?
+  branchId     Int?
+  email        String     @unique @db.VarChar(191)
+  passwordHash String     @db.VarChar(255)
+  fullName     String     @db.VarChar(120)
+  phone        String?    @unique @db.VarChar(20)
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  role                   Role?                  @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  branch                 Branch?                @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  customerProfile        CustomerProfile?
+  addresses              CustomerAddress[]
+  cart                   Cart?
+  onlineOrders           OnlineOrder[]          @relation("OnlineOrderCustomer")
+  posSalesAsStaff        PosSale[]              @relation("PosSaleStaff")
+  posSalesAsCustomer     PosSale[]              @relation("PosSaleCustomer")
+  inventoryTransactions  InventoryTransaction[]
+  createdPurchaseOrders  PurchaseOrder[]        @relation("PurchaseOrderCreatedBy")
+  approvedPurchaseOrders PurchaseOrder[]        @relation("PurchaseOrderApprovedBy")
+  orderStatusLogs        OrderStatusLog[]
+  productReviews         ProductReview[]
+  activityLogs           UserActivityLog[]
+  createdStockChecks     StockCheck[]           @relation("StockCheckCreatedBy")
+
+  @@index([roleId])
+  @@index([branchId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model CustomerProfile {
+  id            Int      @id @default(autoincrement())
+  userId        Int      @unique
+  birthDate     DateTime?
+  gender        String?  @db.VarChar(20)
+  totalOrders   Int      @default(0)
+  totalSpent    Decimal  @default(0.00) @db.Decimal(12, 2)
+  loyaltyPoints Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([totalOrders])
+  @@index([loyaltyPoints])
+  @@map("customer_profiles")
+}
+
+model CustomerAddress {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  receiverName  String   @db.VarChar(120)
+  receiverPhone String   @db.VarChar(20)
+  line1         String   @db.VarChar(255)
+  ward          String?  @db.VarChar(120)
+  district      String?  @db.VarChar(120)
+  city          String   @db.VarChar(120)
+  isDefault     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  onlineOrders OnlineOrder[]
+
+  @@index([userId])
+  @@index([userId, isDefault])
+  @@map("customer_addresses")
+}
+
+model Category {
+  id          Int          @id @default(autoincrement())
+  name        String       @db.VarChar(120)
+  slug        String       @unique @db.VarChar(191)
+  description String?      @db.Text
+  parentId    Int?
+  status      RecordStatus @default(ACTIVE)
+  position    Int          @default(0)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryTree")
+  products Product[]
+
+  @@index([status, position])
+  @@index([parentId])
+  @@index([createdAt])
+  @@map("categories")
+}
+
+model Brand {
+  id          Int          @id @default(autoincrement())
+  name        String       @db.VarChar(120)
+  slug        String       @unique @db.VarChar(191)
+  description String?      @db.Text
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  products Product[]
+
+  @@index([status])
+  @@map("brands")
+}
+
+model Unit {
+  id        Int          @id @default(autoincrement())
+  name      String       @db.VarChar(80)
+  code      String       @unique @db.VarChar(30)
+  status    RecordStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  products Product[]
+
+  @@index([status])
+  @@map("units")
+}
+
+model Product {
+  id           Int           @id @default(autoincrement())
+  categoryId   Int
+  brandId      Int?
+  unitId       Int?
+  name         String        @db.VarChar(180)
+  slug         String        @unique @db.VarChar(191)
+  sku          String        @unique @db.VarChar(64)
+  barcode      String?       @unique @db.VarChar(64)
+  description  String?       @db.Text
+  costPrice    Decimal       @default(0.00) @db.Decimal(12, 2)
+  salePrice    Decimal?      @db.Decimal(12, 2)
+  comparePrice Decimal?      @db.Decimal(12, 2)
+  mainImageUrl String?       @db.VarChar(500)
+  status       ProductStatus @default(DRAFT)
+  minStock     Int           @default(0)
+  soldCount    Int           @default(0)
+  ratingAvg    Decimal       @default(0.00) @db.Decimal(3, 2)
+  ratingCount  Int           @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  category             Category               @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  brand                Brand?                 @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  unit                 Unit?                  @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  images               ProductImage[]
+  inventory            Inventory[]
+  inventoryTransactions InventoryTransaction[]
+  purchaseOrderItems   PurchaseOrderItem[]
+  posSaleItems         PosSaleItem[]
+  cartItems            CartItem[]
+  onlineOrderItems     OnlineOrderItem[]
+  promotionProducts    PromotionProduct[]
+  stockCheckItems      StockCheckItem[]
+  reviews              ProductReview[]
+
+  @@index([categoryId])
+  @@index([brandId])
+  @@index([unitId])
+  @@index([status, categoryId, createdAt])
+  @@index([status, categoryId, salePrice])
+  @@index([status, brandId])
+  @@index([status, soldCount])
+  @@index([status, ratingAvg])
+  @@fulltext([name, description])
+  @@map("products")
+}
+
+model ProductImage {
+  id        Int      @id @default(autoincrement())
+  productId Int
+  url       String   @db.VarChar(500)
+  altText   String?  @db.VarChar(180)
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@index([productId, position])
+  @@map("product_images")
+}
+
+model Warehouse {
+  id        Int          @id @default(autoincrement())
+  branchId  Int
+  code      String       @unique @db.VarChar(50)
+  name      String       @db.VarChar(150)
+  address   String?      @db.VarChar(255)
+  status    RecordStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  branch                Branch                 @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  inventory             Inventory[]
+  inventoryTransactions InventoryTransaction[]
+  purchaseOrders        PurchaseOrder[]
+  onlineOrders          OnlineOrder[]
+  stockChecks           StockCheck[]
+
+  @@index([branchId])
+  @@index([status])
+  @@map("warehouses")
+}
+
+model Inventory {
+  id               Int      @id @default(autoincrement())
+  warehouseId      Int
+  productId        Int
+  quantity         Int      @default(0)
+  reservedQuantity Int      @default(0)
+  updatedAt        DateTime @updatedAt
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([warehouseId, productId])
+  @@index([productId])
+  @@index([warehouseId, quantity])
+  @@map("inventory")
+}
+
+model InventoryTransaction {
+  id             Int                      @id @default(autoincrement())
+  warehouseId    Int
+  productId      Int
+  userId         Int?
+  type           InventoryTransactionType
+  quantity       Int
+  beforeQuantity Int
+  afterQuantity  Int
+  referenceType  String?                  @db.VarChar(80)
+  referenceId    Int?
+  note           String?                  @db.VarChar(500)
+  createdAt      DateTime                 @default(now())
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Restrict)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([warehouseId, productId, createdAt])
+  @@index([productId, createdAt])
+  @@index([type, createdAt])
+  @@index([referenceType, referenceId])
+  @@map("inventory_transactions")
+}
+
+model Supplier {
+  id        Int          @id @default(autoincrement())
+  code      String       @unique @db.VarChar(50)
+  name      String       @db.VarChar(150)
+  phone     String?      @db.VarChar(20)
+  email     String?      @db.VarChar(191)
+  address   String?      @db.VarChar(255)
+  status    RecordStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+
+  @@index([status])
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id           Int                 @id @default(autoincrement())
+  code         String              @unique @db.VarChar(50)
+  supplierId   Int
+  branchId     Int
+  warehouseId  Int
+  createdById  Int
+  approvedById Int?
+  status       PurchaseOrderStatus @default(DRAFT)
+  subtotal     Decimal             @default(0.00) @db.Decimal(12, 2)
+  total        Decimal             @default(0.00) @db.Decimal(12, 2)
+  note         String?             @db.VarChar(500)
+  approvedAt   DateTime?
+  receivedAt   DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  supplier   Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  branch     Branch              @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  warehouse  Warehouse           @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  createdBy  User                @relation("PurchaseOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy User?               @relation("PurchaseOrderApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  items      PurchaseOrderItem[]
+
+  @@index([supplierId, status, createdAt])
+  @@index([branchId, status, createdAt])
+  @@index([warehouseId, status, createdAt])
+  @@index([createdById])
+  @@index([approvedById])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              Int      @id @default(autoincrement())
+  purchaseOrderId Int
+  productId       Int
+  quantity        Int
+  receivedQuantity Int     @default(0)
+  unitCost        Decimal  @db.Decimal(12, 2)
+  totalCost       Decimal  @db.Decimal(12, 2)
+  createdAt       DateTime @default(now())
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product       Product       @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([purchaseOrderId])
+  @@index([productId])
+  @@map("purchase_order_items")
+}
+
+model PosSale {
+  id             Int           @id @default(autoincrement())
+  code           String        @unique @db.VarChar(50)
+  branchId       Int
+  staffId        Int
+  customerId     Int?
+  subtotal       Decimal       @default(0.00) @db.Decimal(12, 2)
+  discountTotal  Decimal       @default(0.00) @db.Decimal(12, 2)
+  taxTotal       Decimal       @default(0.00) @db.Decimal(12, 2)
+  total          Decimal       @default(0.00) @db.Decimal(12, 2)
+  paidAmount     Decimal       @default(0.00) @db.Decimal(12, 2)
+  changeAmount   Decimal       @default(0.00) @db.Decimal(12, 2)
+  status         PosSaleStatus @default(COMPLETED)
+  paymentStatus  PaymentStatus @default(PAID)
+  soldAt         DateTime      @default(now())
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  branch   Branch        @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  staff    User          @relation("PosSaleStaff", fields: [staffId], references: [id], onDelete: Restrict)
+  customer User?         @relation("PosSaleCustomer", fields: [customerId], references: [id], onDelete: SetNull)
+  items    PosSaleItem[]
+
+  @@index([branchId, soldAt])
+  @@index([staffId, soldAt])
+  @@index([customerId, soldAt])
+  @@index([status, soldAt])
+  @@map("pos_sales")
+}
+
+model PosSaleItem {
+  id             Int      @id @default(autoincrement())
+  posSaleId      Int
+  productId      Int?
+  productName    String   @db.VarChar(180)
+  productSku     String   @db.VarChar(64)
+  productBarcode String?  @db.VarChar(64)
+  unitPrice      Decimal  @db.Decimal(12, 2)
+  costPrice      Decimal  @default(0.00) @db.Decimal(12, 2)
+  quantity       Int
+  discountAmount Decimal  @default(0.00) @db.Decimal(12, 2)
+  totalPrice     Decimal  @db.Decimal(12, 2)
+  createdAt      DateTime @default(now())
+
+  posSale PosSale  @relation(fields: [posSaleId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([posSaleId])
+  @@index([productId])
+  @@map("pos_sale_items")
+}
+
+model Cart {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items CartItem[]
+
+  @@map("carts")
+}
+
+model CartItem {
+  id        Int      @id @default(autoincrement())
+  cartId    Int
+  productId Int
+  quantity  Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([cartId, productId])
+  @@index([cartId])
+  @@index([productId])
+  @@map("cart_items")
+}
+
+model OrderStatus {
+  id                    Int          @id @default(autoincrement())
+  code                  String       @unique @db.VarChar(50)
+  name                  String       @db.VarChar(120)
+  position              Int          @default(0)
+  isDefault             Boolean      @default(false)
+  isFinal               Boolean      @default(false)
+  allowCancelByCustomer Boolean      @default(false)
+  status                RecordStatus @default(ACTIVE)
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  onlineOrders OnlineOrder[]
+
+  @@index([status, position])
+  @@map("order_statuses")
+}
+
+model OnlineOrder {
+  id              Int           @id @default(autoincrement())
+  orderCode       String        @unique @db.VarChar(50)
+  customerId      Int
+  addressId       Int?
+  branchId        Int?
+  warehouseId     Int?
+  statusCode      String        @default("PENDING") @db.VarChar(50)
+  receiverName    String        @db.VarChar(120)
+  receiverPhone   String        @db.VarChar(20)
+  shippingAddress String        @db.VarChar(500)
+  note            String?       @db.VarChar(500)
+  subtotal        Decimal       @default(0.00) @db.Decimal(12, 2)
+  shippingFee     Decimal       @default(0.00) @db.Decimal(12, 2)
+  discountTotal   Decimal       @default(0.00) @db.Decimal(12, 2)
+  total           Decimal       @default(0.00) @db.Decimal(12, 2)
+  paymentStatus   PaymentStatus @default(UNPAID)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  customer User             @relation("OnlineOrderCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  address  CustomerAddress? @relation(fields: [addressId], references: [id], onDelete: Restrict)
+  branch   Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  warehouse Warehouse?      @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  status   OrderStatus      @relation(fields: [statusCode], references: [code], onDelete: Restrict)
+  items    OnlineOrderItem[]
+  logs     OrderStatusLog[]
+  delivery Delivery?
+  reviews  ProductReview[]
+
+  @@index([customerId, createdAt])
+  @@index([addressId])
+  @@index([branchId, statusCode, createdAt])
+  @@index([warehouseId, statusCode, createdAt])
+  @@index([statusCode, createdAt])
+  @@index([paymentStatus, createdAt])
+  @@index([createdAt])
+  @@map("online_orders")
+}
+
+model OnlineOrderItem {
+  id             Int      @id @default(autoincrement())
+  onlineOrderId  Int
+  productId      Int?
+  productName    String   @db.VarChar(180)
+  productSku     String   @db.VarChar(64)
+  productBarcode String?  @db.VarChar(64)
+  unitPrice      Decimal  @db.Decimal(12, 2)
+  costPrice      Decimal  @default(0.00) @db.Decimal(12, 2)
+  quantity       Int
+  discountAmount Decimal  @default(0.00) @db.Decimal(12, 2)
+  totalPrice     Decimal  @db.Decimal(12, 2)
+  createdAt      DateTime @default(now())
+
+  onlineOrder OnlineOrder @relation(fields: [onlineOrderId], references: [id], onDelete: Cascade)
+  product     Product?    @relation(fields: [productId], references: [id], onDelete: SetNull)
+  review      ProductReview?
+
+  @@index([onlineOrderId])
+  @@index([productId])
+  @@map("online_order_items")
+}
+
+model ProductReview {
+  id                Int          @id @default(autoincrement())
+  userId            Int
+  productId         Int
+  onlineOrderId     Int
+  onlineOrderItemId Int?         @unique
+  rating            Int
+  content           String?      @db.Text
+  status            RecordStatus @default(ACTIVE)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product         Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  onlineOrder     OnlineOrder      @relation(fields: [onlineOrderId], references: [id], onDelete: Cascade)
+  onlineOrderItem OnlineOrderItem? @relation(fields: [onlineOrderItemId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, productId, onlineOrderId])
+  @@index([productId, status, createdAt])
+  @@index([userId, createdAt])
+  @@index([onlineOrderId])
+  @@map("product_reviews")
+}
+
+model OrderStatusLog {
+  id             Int      @id @default(autoincrement())
+  onlineOrderId  Int
+  fromStatusCode String?  @db.VarChar(50)
+  toStatusCode   String   @db.VarChar(50)
+  changedById    Int?
+  note           String?  @db.VarChar(500)
+  createdAt      DateTime @default(now())
+
+  onlineOrder OnlineOrder @relation(fields: [onlineOrderId], references: [id], onDelete: Cascade)
+  changedBy   User?       @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([onlineOrderId, createdAt])
+  @@index([toStatusCode, createdAt])
+  @@index([changedById])
+  @@map("order_status_logs")
+}
+
+model PaymentMethod {
+  id        Int          @id @default(autoincrement())
+  code      String       @unique @db.VarChar(50)
+  name      String       @db.VarChar(120)
+  status    RecordStatus @default(ACTIVE)
+  config    Json?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  payments Payment[]
+
+  @@index([status])
+  @@map("payment_methods")
+}
+
+model Payment {
+  id              Int           @id @default(autoincrement())
+  paymentCode     String        @unique @db.VarChar(50)
+  targetType      String        @db.VarChar(50)
+  targetId        Int
+  paymentMethodId Int
+  amount          Decimal       @db.Decimal(12, 2)
+  status          PaymentStatus @default(PENDING)
+  transactionCode String?       @db.VarChar(120)
+  note            String?       @db.VarChar(500)
+  paidAt          DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  paymentMethod PaymentMethod @relation(fields: [paymentMethodId], references: [id], onDelete: Restrict)
+
+  @@index([targetType, targetId])
+  @@index([paymentMethodId])
+  @@index([status, createdAt])
+  @@map("payments")
+}
+
+model Delivery {
+  id              Int            @id @default(autoincrement())
+  onlineOrderId   Int            @unique
+  trackingCode    String?        @unique @db.VarChar(80)
+  carrierName     String?        @db.VarChar(120)
+  receiverName    String         @db.VarChar(120)
+  receiverPhone   String         @db.VarChar(20)
+  shippingAddress String         @db.VarChar(500)
+  fee             Decimal        @default(0.00) @db.Decimal(12, 2)
+  status          DeliveryStatus @default(PENDING)
+  shippedAt       DateTime?
+  deliveredAt     DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  onlineOrder OnlineOrder @relation(fields: [onlineOrderId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@map("deliveries")
+}
+
+model Promotion {
+  id                Int             @id @default(autoincrement())
+  code              String          @unique @db.VarChar(50)
+  name              String          @db.VarChar(150)
+  description       String?         @db.Text
+  discountType      DiscountType
+  discountValue     Decimal         @db.Decimal(12, 2)
+  minOrderAmount    Decimal?        @db.Decimal(12, 2)
+  maxDiscountAmount Decimal?        @db.Decimal(12, 2)
+  startAt           DateTime
+  endAt             DateTime
+  status            PromotionStatus @default(ACTIVE)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  products PromotionProduct[]
+
+  @@index([status, startAt, endAt])
+  @@map("promotions")
+}
+
+model PromotionProduct {
+  id          Int      @id @default(autoincrement())
+  promotionId Int
+  productId   Int
+  createdAt   DateTime @default(now())
+
+  promotion Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([promotionId, productId])
+  @@index([productId])
+  @@map("promotion_products")
+}
+
+model DeliveryFeeRule {
+  id             Int          @id @default(autoincrement())
+  name           String       @db.VarChar(120)
+  city           String?      @db.VarChar(120)
+  minOrderAmount Decimal?     @db.Decimal(12, 2)
+  maxOrderAmount Decimal?     @db.Decimal(12, 2)
+  fee            Decimal      @db.Decimal(12, 2)
+  status         RecordStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([status, city])
+  @@map("delivery_fee_rules")
+}
+
+model ReturnPolicy {
+  id              Int          @id @default(autoincrement())
+  title           String       @db.VarChar(150)
+  content         String       @db.Text
+  allowReturnDays Int          @default(7)
+  status          RecordStatus @default(ACTIVE)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([status])
+  @@map("return_policies")
+}
+
+model SystemSetting {
+  id          Int      @id @default(autoincrement())
+  key         String   @unique @db.VarChar(120)
+  value       String   @db.Text
+  group       String   @db.VarChar(80)
+  description String?  @db.VarChar(255)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([group])
+  @@map("system_settings")
+}
+
+model UserActivityLog {
+  id         Int      @id @default(autoincrement())
+  userId     Int?
+  action     String   @db.VarChar(120)
+  entityType String?  @db.VarChar(80)
+  entityId   Int?
+  ipAddress  String?  @db.VarChar(45)
+  userAgent  String?  @db.VarChar(255)
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@index([entityType, entityId])
+  @@map("user_activity_logs")
+}
+
+model StockCheck {
+  id          Int              @id @default(autoincrement())
+  code        String           @unique @db.VarChar(50)
+  warehouseId Int
+  createdById Int
+  status      StockCheckStatus @default(DRAFT)
+  note        String?          @db.VarChar(500)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  warehouse Warehouse        @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  createdBy User             @relation("StockCheckCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  items     StockCheckItem[]
+
+  @@index([warehouseId, status, createdAt])
+  @@index([createdById])
+  @@map("stock_checks")
+}
+
+model StockCheckItem {
+  id             Int      @id @default(autoincrement())
+  stockCheckId   Int
+  productId      Int
+  systemQuantity Int
+  actualQuantity Int
+  difference     Int
+  createdAt      DateTime @default(now())
+
+  stockCheck StockCheck @relation(fields: [stockCheckId], references: [id], onDelete: Cascade)
+  product    Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([stockCheckId])
+  @@index([productId])
+  @@map("stock_check_items")
+}
